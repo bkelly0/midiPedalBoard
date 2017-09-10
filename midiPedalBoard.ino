@@ -5,9 +5,9 @@
 MIDI_CREATE_DEFAULT_INSTANCE();
 
 #define DEBUG_NONE 0
-#define DEBUG_SENSORS 1
-#define DEBUG_VELOCITY 2
-#define DEBUG_PEAKS 3
+#define DEBUG_SENSORS 1 //sensor values to serial plotter
+#define DEBUG_VELOCITY 2 //velocity values to serial plotter
+#define DEBUG_PEAKS 3 //peak difference values to serial plotter
 
 //TODO: test and adjust
 #define SENSOR_THREASHOLD 200
@@ -33,6 +33,7 @@ byte minor = 1;
 byte diminished = 2;
 byte majorPattern[] = {major, minor, minor, major, major, minor, diminished};
 long tempCount=0;
+
 class Note {
   public:
     int mpNoteChannel, mpLedChannel;
@@ -44,12 +45,16 @@ class Note {
     long threashold = 0;
     float averagePeak = 600.0; //default - debug for each sensor
     float velocity = 0;
+    int midiBaseNote = 0;
+    int midiNote = 0;
 
     Note() {}
-    Note(int _mpNoteChannel, int _mpLedChannel, String _name) {
+    Note(int _mpNoteChannel, int _mpLedChannel, String _name, int _midiBaseNote) {
       mpNoteChannel = _mpNoteChannel;
       mpLedChannel = _mpLedChannel;
       name = _name;
+      midiBaseNote = _midiBaseNote;
+      midiNote = _midiBaseNote;
     }
     void updateBaseline(long value) {
         baseline = value;
@@ -60,15 +65,22 @@ class Note {
       velocity = 0;
     }
     float captureVelocity() {
-      velocity = (peakReading - baseline) / averagePeak;
-     
-      if (velocity < 0) {
-        velocity = 0;
-      } else if (velocity > 1) {
-        velocity = 1;
-      }
-      velocity = velocity * 127.0;
+      velocity = getVelocityPercentage() * 127.0;
       return velocity;
+    }
+    float getAftertouch() {
+      return getVelocityPercentage() * 127.0;
+    }
+
+    float getVelocityPercentage() {
+      float p = (peakReading - baseline) / averagePeak;
+    
+      if (p < 0) {
+        p = 0;
+      } else if (p > 1) {
+        p = 1;
+      }
+      return p;
     }
 
     float getPeakDebug() {
@@ -145,6 +157,7 @@ class Settings {
   int midiChannel = 1;
   int octave = 3;
   Mode mode = modes[0];
+  boolean afterTouch = false;
 };
 Settings settings = Settings();
 
@@ -171,7 +184,7 @@ void setup() {
 
   String noteNames[13] = {"C", "C#","D","D#","E","F","F#","G","G#","A","A#","B","C2"};
   for (int i=0; i<13; i++) {
-    notes[i] = Note(i,i,noteNames[i]);
+    notes[i] = Note(i,i,noteNames[i], i);
   }
   sensorMp.init();
 
@@ -272,6 +285,9 @@ void readSensors() {
           notes[i].stateChangeCount = 0;
           notes[i].sensorState = SENSOR_HOLDING;
           notes[i].captureVelocity();
+          if (debugMode == DEBUG_NONE) {
+            MIDI.sendNoteOn(notes[i].midiNote, notes[i].velocity, settings.midiChannel);
+          }
       }
 
     
@@ -286,6 +302,9 @@ void readSensors() {
           }
        } else {
          notes[i].stateChangeCount = 0;
+         if (settings.afterTouch && debugMode == DEBUG_NONE) {
+            MIDI.sendPolyPressure(notes[i].midiNote, notes[i].getAftertouch(), settings.midiChannel);
+         }
        }
        
     } else if (notes[i].sensorState == SENSOR_FALLING) {
@@ -337,7 +356,9 @@ void collectSensorCalibrationData() {
 }
 
 void stopNote(int index) {
-  //TODO: stop midi note
+   if (debugMode == DEBUG_NONE) {
+    MIDI.sendNoteOff(notes[index].midiNote, 0, settings.midiChannel);
+  }
   notes[index].reset();
   //digitalWrite(13, LOW);
 }
