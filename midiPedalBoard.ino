@@ -8,6 +8,8 @@ MIDI_CREATE_DEFAULT_INSTANCE();
 #define DEBUG_SENSORS 1 //sensor values to serial plotter
 #define DEBUG_VELOCITY 2 //velocity values to serial plotter
 #define DEBUG_PEAKS 3 //peak difference values to serial plotter
+#define DEBUG_NOTE 4 //midi note on/off
+#define DEBUG_DIFFERENCE 5 //debug changes in sensor reading
 
 //TODO: test and adjust
 #define SENSOR_THREASHOLD 200
@@ -26,13 +28,13 @@ MIDI_CREATE_DEFAULT_INSTANCE();
 boolean calibrationMode = false;
 boolean configMode = false;
 long calibrationTime = 0;
-int debugMode = DEBUG_VELOCITY;
+int debugMode = DEBUG_NONE;
 
 byte major = 0;
 byte minor = 1;
 byte diminished = 2;
 byte majorPattern[] = {major, minor, minor, major, major, minor, diminished};
-long tempCount=0;
+long enableTime;
 
 class Note {
   public:
@@ -101,12 +103,12 @@ class Multiplexer {
     {0,0,1,0},
     {1,0,1,0},
     {0,1,1,0},
-    {1,1,1,0},
+    {1,1,1,0}, 
     {0,0,0,1},
     {1,0,0,1},
     {0,1,0,1},
     {1,1,0,1},
-    {0,0,1,1},
+    {0,0,1,1},   
     {1,0,1,1},
     {0,1,1,1},
     {1,1,1,1}
@@ -133,10 +135,12 @@ class Multiplexer {
     return analogRead(sig);
   }
   void selectChannel(int channel) {
+
     digitalWrite(s0,mpAddresses[channel][0]);
     digitalWrite(s1,mpAddresses[channel][1]);
     digitalWrite(s2,mpAddresses[channel][2]);
     digitalWrite(s3,mpAddresses[channel][3]);
+
   }
 };
 
@@ -181,6 +185,7 @@ void setup() {
   analogWrite(LED, 255);
   pinMode(13, OUTPUT);
   digitalWrite(13, LOW);
+  analogWrite(LED, 0);
 
   String noteNames[13] = {"C", "C#","D","D#","E","F","F#","G","G#","A","A#","B","C2"};
   for (int i=0; i<13; i++) {
@@ -192,6 +197,8 @@ void setup() {
  
   initLCD();
   writeLCD("Mode: " + String(settings.mode.name), "Ch: " + String(settings.midiChannel) + " Oct:" + String(settings.octave));
+
+  enableTime = millis() + 2000;
 }
 
 void setupPeakValues() {
@@ -203,35 +210,7 @@ void setupPeakValues() {
 }
 
 void loop() {
-  /*
-  ms = millis();
-  if (calibrationMode) {
-    if (calibrationTime == 0) {
-      calibrationTime = ms + 10000;
-    }
-    collectSensorCalibrationData();
-    if (ms >= calibrationTime) {
-      calibrationTime = 0;
-      for (int i=0; i<2; i++) {
-        Serial.print(notes[i].peakReading);
-        Serial.print(" ");
-        Serial.print(notes[i].baseline);
-        Serial.println();
-      }
-    }
-   
-  } 
-
-  else { */
-    if (!configMode) {
-      readSensors();
-      //MIDI.sendNoteOn(42, 127, 1);
-      //delay(1000);
-      //MIDI.sendNoteOff(42, 0, 1);
-      //delay(500);
-    }  
- // }
-  
+  readSensors();
 }
 
 void initLCD() {
@@ -262,32 +241,39 @@ void collectConfigData() {
 void readSensors() {
   int i;
   float maxVelocity;
+
   
-  for (i=0; i<8; i++) {
+  for (i=0; i<13; i++) {
     long value = sensorMp.analogReadChannel(notes[i].mpNoteChannel);
     long difference = value - notes[i].baseline;
 
     if (debugMode == DEBUG_SENSORS) {
       Serial.print(value);
       Serial.print(" ");
+    } else if (debugMode == DEBUG_DIFFERENCE) {
+      Serial.print(difference);
+      Serial.print(" ");
     }
-    
+
+    if (enableTime > 0 && millis() < enableTime) {
+      //let a baseline be established
+      continue;
+    }
+    enableTime = 0;
+
     if (notes[i].sensorState == SENSOR_BASELINE && notes[i].baseline > 0 && difference > 15) {
-        notes[i].sensorState = SENSOR_RISING;
-    
+        if (difference >= 100) {
+          noteOn(i);
+        } else {
+          notes[i].sensorState = SENSOR_RISING;
+        } 
     } else if (notes[i].sensorState == SENSOR_RISING) {
       notes[i].stateChangeCount++;
       
       if (value > notes[i].peakReading && notes[i].stateChangeCount < 3) {
         notes[i].peakReading = value; //still rising
       } else if (value <= notes[i].peakReading || notes[i].stateChangeCount == 3) {
-          //digitalWrite(13, HIGH); 
-          notes[i].stateChangeCount = 0;
-          notes[i].sensorState = SENSOR_HOLDING;
-          notes[i].captureVelocity();
-          if (debugMode == DEBUG_NONE) {
-            MIDI.sendNoteOn(notes[i].midiNote, notes[i].velocity, settings.midiChannel);
-          }
+        noteOn(i);
       }
 
     
@@ -317,12 +303,13 @@ void readSensors() {
     } else {
       notes[i].updateBaseline(value);
     }
-
+   
     //get value for led
     float velocity = notes[i].velocity;
     if (velocity > maxVelocity) {
       maxVelocity = velocity;
     }
+   
     if (debugMode == DEBUG_VELOCITY) {
       Serial.print(velocity);
       Serial.print(" ");
@@ -332,11 +319,27 @@ void readSensors() {
     }
    
   }
-
-  analogWrite(LED, (maxVelocity / 127.0) * 255);
+ 
+    if (maxVelocity > 0) {
+      analogWrite(LED, (maxVelocity / 127.0) * 255);
+    } else {
+      analogWrite(LED, 0);
+    }
   
-  if (debugMode != DEBUG_NONE) {
+  if (debugMode != DEBUG_NONE && debugMode != DEBUG_NOTE) {
       Serial.println();
+  }
+}
+
+void noteOn(int index) {
+  notes[index].stateChangeCount = 0;
+  notes[index].sensorState = SENSOR_HOLDING;
+  notes[index].captureVelocity();
+  if (debugMode == DEBUG_NONE) {
+    MIDI.sendNoteOn(notes[index].midiNote, notes[index].velocity, settings.midiChannel);
+  } else if (debugMode == DEBUG_NOTE) {
+    Serial.print("ON ");
+    Serial.println(notes[index].name);       
   }
 }
 
@@ -358,6 +361,9 @@ void collectSensorCalibrationData() {
 void stopNote(int index) {
    if (debugMode == DEBUG_NONE) {
     MIDI.sendNoteOff(notes[index].midiNote, 0, settings.midiChannel);
+  } else if (debugMode == DEBUG_NOTE) {
+    Serial.print("OFF ");
+    Serial.println(notes[index].name);          
   }
   notes[index].reset();
   //digitalWrite(13, LOW);
