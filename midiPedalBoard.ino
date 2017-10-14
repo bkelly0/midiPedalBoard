@@ -24,7 +24,7 @@ byte MODE_OCTAVE = 1;
 byte MODE_5THS = 2;
 
 //note: debugging decreases performace
-int debugMode = DEBUG_NONE;
+int debugMode = DEBUG_SENSORS;
 boolean configMode = false;
 
 //TODO: modes for this stuff
@@ -300,6 +300,8 @@ void readSensors() {
     enableTime = 0;
 
 
+
+
     if (notes[i].sensorState == SENSOR_BASELINE && notes[i].baseline > 0 && difference > 7) {
       if (notes[i].reenableTime > 0) {
         if (ms >= notes[i].reenableTime) {
@@ -310,6 +312,8 @@ void readSensors() {
       }
         
       if (difference >= 100) {
+        //skip rising state 
+        notes[i].peakReading = value;
         noteOn(i);
       } else {
         notes[i].sensorState = SENSOR_RISING;
@@ -324,7 +328,7 @@ void readSensors() {
       }
 
     
-    } else if (notes[i].sensorState == SENSOR_HOLDING) {
+    } else if (notes[i].sensorState == SENSOR_HOLDING) {      
        if(value < notes[i].peakReading - 10) {
           notes[i].stateChangeCount++;
           if (notes[i].stateChangeCount == 2) {
@@ -390,7 +394,9 @@ void noteOn(int index) {
   }
   
   if (debugMode == DEBUG_NONE) {
-    MIDI.sendNoteOn(notes[index].midiNote, notes[index].velocity, configs[configIndex].midiChannel);
+        MIDI.sendNoteOn(notes[index].midiNote, 127, configs[configIndex].midiChannel);
+
+    //MIDI.sendNoteOn(notes[index].midiNote, notes[index].velocity, configs[configIndex].midiChannel);
     if (currentNote) {
       stopNote(currentNote);
     }
