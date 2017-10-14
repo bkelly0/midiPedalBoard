@@ -24,7 +24,7 @@ byte MODE_OCTAVE = 1;
 byte MODE_5THS = 2;
 
 //note: debugging decreases performace
-int debugMode = DEBUG_SENSORS;
+int debugMode = DEBUG_PEAKS;
 boolean configMode = false;
 
 //TODO: modes for this stuff
@@ -33,8 +33,10 @@ byte minor = 1;
 byte diminished = 2;
 byte majorPattern[] = {major, minor, minor, major, major, minor, diminished};
 
+long maxDifference = 0;
 long enableTime;
 int currentNote;
+int nextNoteIndex = -1;
 
 class Note {
   public:
@@ -74,6 +76,7 @@ class Note {
     }
 
     float getVelocityPercentage() {
+      Serial.println((peakReading - baseline));
       float p = (peakReading - baseline) / averagePeak;
     
       if (p < 0) {
@@ -271,14 +274,8 @@ void debugDifference(long difference) {
     Serial.println();
 }
 
-void collectConfigData() {
-  
-}
-
 void readSensors() {
   int i;
-  float maxVelocity;
-
   ms = millis();
   
   for (i=0; i<14; i++) {
@@ -286,8 +283,8 @@ void readSensors() {
     long difference = value - notes[i].baseline;
 
     if (debugMode == DEBUG_SENSORS) {
-      Serial.print(value);
-      Serial.print(" ");
+      //Serial.print(value);
+      //Serial.print(" ");
     } else if (debugMode == DEBUG_DIFFERENCE) {
       Serial.print(difference);
       Serial.print(" ");
@@ -299,10 +296,8 @@ void readSensors() {
     }
     enableTime = 0;
 
-
-
-
     if (notes[i].sensorState == SENSOR_BASELINE && notes[i].baseline > 0 && difference > 7) {
+      
       if (notes[i].reenableTime > 0) {
         if (ms >= notes[i].reenableTime) {
           notes[i].reenableTime = 0;
@@ -313,8 +308,8 @@ void readSensors() {
         
       if (difference >= 100) {
         //skip rising state 
+        updateNextNote(i, difference);
         notes[i].peakReading = value;
-        noteOn(i);
       } else {
         notes[i].sensorState = SENSOR_RISING;
       } 
@@ -324,7 +319,7 @@ void readSensors() {
       if (value > notes[i].peakReading && notes[i].stateChangeCount < 3) {
         notes[i].peakReading = value; //still rising
       } else if (value <= notes[i].peakReading || notes[i].stateChangeCount == 3) {
-        noteOn(i);
+        updateNextNote(i, difference);
       }
 
     
@@ -355,15 +350,9 @@ void readSensors() {
     } else {
       notes[i].updateBaseline(value);
     }
-   
-    //get value for led
-    float velocity = notes[i].velocity;
-    if (velocity > maxVelocity) {
-      maxVelocity = velocity;
-    }
-   
+  
     if (debugMode == DEBUG_VELOCITY) {
-      Serial.print(velocity);
+      Serial.print(notes[i].velocity);
       Serial.print(" ");
     } else if (debugMode == DEBUG_PEAKS) {
       Serial.print(notes[i].getPeakDebug());
@@ -371,19 +360,33 @@ void readSensors() {
     }
    
   }
- 
-    if (maxVelocity > 0) {
-      analogWrite(LED, (maxVelocity / 127.0) * 255);
-    } else {
-      analogWrite(LED, 0);
-    }
+
+  if (nextNoteIndex >= 0) {
+    noteOn(nextNoteIndex);
+  } else if (currentNote < 0) {
+    analogWrite(LED, 0);
+  }
+
+  maxDifference = 0;
+  nextNoteIndex = -1;
   
   if (debugMode != DEBUG_NONE && debugMode != DEBUG_NOTE) {
       Serial.println();
   }
+
+}
+
+void updateNextNote(int index, long difference) {
+  if (difference > maxDifference) {
+    maxDifference = difference;
+    nextNoteIndex = index;
+  }
 }
 
 void noteOn(int index) {
+  if (currentNote) {
+    stopNote(currentNote);
+  }
   notes[index].stateChangeCount = 0;
   notes[index].sensorState = SENSOR_HOLDING;
   notes[index].captureVelocity();
@@ -394,12 +397,8 @@ void noteOn(int index) {
   }
   
   if (debugMode == DEBUG_NONE) {
-        MIDI.sendNoteOn(notes[index].midiNote, 127, configs[configIndex].midiChannel);
+    MIDI.sendNoteOn(notes[index].midiNote, 127, configs[configIndex].midiChannel);
 
-    //MIDI.sendNoteOn(notes[index].midiNote, notes[index].velocity, configs[configIndex].midiChannel);
-    if (currentNote) {
-      stopNote(currentNote);
-    }
     /*
     if (configs[configIndex].mode.id == 1) {
       //octave
@@ -412,22 +411,10 @@ void noteOn(int index) {
   }
   currentNote = index;
 
+  analogWrite(LED, (notes[index].velocity / 127.0) * 255);
+
 }
 
-void collectSensorCalibrationData() {
-    for (int i=0; i<12; i++) {
-      long value = sensorMp.analogReadChannel(notes[i].mpNoteChannel);
-      if (notes[i].baseline == 0) {
-        notes[i].baseline = value;
-      }
-      if (value > notes[i].peakReading) {
-        notes[i].peakReading = value;
-      } else if (value < notes[i].baseline) {
-        notes[i].baseline = value;
-      }
-      
-    }
-}
 
 void stopNote(int index) {
   digitalWrite(13, LOW);
@@ -442,7 +429,7 @@ void stopNote(int index) {
   }
   notes[index].reset();
   if (currentNote == index) {
-    currentNote = NULL;
+    currentNote = -1;
   }
   //digitalWrite(13, LOW);
 }
