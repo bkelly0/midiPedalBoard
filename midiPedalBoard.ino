@@ -22,6 +22,7 @@ MIDI_CREATE_DEFAULT_INSTANCE();
 byte MODE_SINGLE = 0;
 byte MODE_OCTAVE = 1;
 byte MODE_5THS = 2;
+byte MODE_DBL_OCTAVE = 3;
 
 //note: debugging decreases performace
 int debugMode = DEBUG_NONE;
@@ -45,7 +46,6 @@ class Note {
     int stateChangeCount = 0;
     long peakReading = 0;
     long baseline = 0;
-    long threashold = 0;
     //float averagePeak = 500.0; //default - debug for each sensor
     float velocity = 0;
     int midiBaseNote = 0;
@@ -61,7 +61,6 @@ class Note {
     }
     void updateBaseline(long value) {
         baseline = value;
-        threashold = value + 10;
     }
     void reset() {
       peakReading = 0;
@@ -160,18 +159,16 @@ class Config {
   public:
   int midiChannel = 1;
   int octave = 3;
-  byte mode;
+  int mode;
   boolean afterTouch = false;
-  String description1;
-  String description2;
+  String description;
   Config() {}
-  Config(int _midiChannel, int _octave, byte _mode, boolean _afterTouch, String _desc1, String _desc2) {
+  Config(int _midiChannel, int _octave, byte _mode, boolean _afterTouch, String _desc) {
     midiChannel = _midiChannel;
     octave = _octave;
     mode = _mode;
     afterTouch = _afterTouch;
-    description1 = _desc1;
-    description2 =_desc2;
+    description = _desc;
   }
 
 };
@@ -182,10 +179,11 @@ Multiplexer sensorMp = Multiplexer(A0,5,4,3,2);
 //http://henrysbench.capnfatz.com/henrys-bench/arduino-projects-tips-and-more/arduino-quick-tip-find-your-i2c-address/
 LiquidCrystal_I2C  lcd(0x3F,16, 2);
 int configIndex = 0;
-Config configs[3] = {
-    Config(2, 3, MODE_SINGLE, false, "Single - Oct: 3", "XXXXXXX"),
-    Config(2, 5, MODE_OCTAVE, false, "Octave - Oct: 5", "YYYYYYYY"),
-    Config(2, 5, MODE_5THS, false, "Fifths - Oct: 5", "ZZZZZZZ")
+Config configs[4] = {
+    Config(2, 3, MODE_SINGLE, false, "Single- Oct:3"),
+    Config(2, 5, MODE_OCTAVE, false, "Octave- Oct:5"),
+    Config(2, 5, MODE_5THS, false, "Fifths- Oct:5"),
+    Config(2, 3, MODE_DBL_OCTAVE, true, "DblOctAT- Oct:3")
   };
 long ms;//current time
 
@@ -193,7 +191,6 @@ void setup() {
   
   if (debugMode != DEBUG_NONE) {
     Serial.begin(9600);
-    Serial.println("Starting...");
   } else {
       MIDI.begin(MIDI_CHANNEL_OMNI);
   }
@@ -221,7 +218,7 @@ void setup() {
 
 void selectNextConfig() {
   configIndex++;
-  if (configIndex > 2) {
+  if (configIndex > 3) {
     configIndex = 0;
   }
   updateMidiNoteValues();
@@ -229,7 +226,13 @@ void selectNextConfig() {
 }
 
 void updateLCD() {
-    writeLCD(configs[configIndex].description1, configs[configIndex].description2);
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("MODE ");
+  lcd.setCursor(6, 0);
+  lcd.print(configIndex);
+  lcd.setCursor(0,1);
+  lcd.print(configs[configIndex].description);
 }
 
 void updateMidiNoteValues() {
@@ -248,7 +251,6 @@ void initLCD() {
   lcd.init();
   lcd.backlight();
   lcd.setCursor(0,0);
-  lcd.print("Starting...");
 }
 
 void writeLCD(String line1, String line2) {
@@ -276,28 +278,31 @@ void readSensors() {
     if (debugMode == DEBUG_SENSORS) {
       Serial.print(value);
       Serial.print(" ");
+      Serial.print(notes[i].sensorState);
     } else if (debugMode == DEBUG_DIFFERENCE) {
       Serial.print(difference);
       Serial.print(" ");
     }
 
+  
 
     if (enableTime > 0 && ms < enableTime) {
       //let a baseline be established
       continue;
     }
     enableTime = 0;
+
+    if (notes[i].reenableTime > 0) {
+      if (ms >= notes[i].reenableTime) {
+        notes[i].reenableTime = 0;
+      } else {
+        notes[i].updateBaseline(value);
+        continue;
+      }
+    }
  
     if (notes[i].sensorState == SENSOR_BASELINE && notes[i].baseline > 0 && difference > 7) {
-     
-      if (notes[i].reenableTime > 0) {
-        if (ms >= notes[i].reenableTime) {
-          notes[i].reenableTime = 0;
-        } else {
-          continue;
-        }
-      }
-  
+
       if (difference >= 100) {
         //skip rising state 
         updateNextNote(i, difference);
@@ -388,12 +393,14 @@ void noteOn(int index) {
   if (index != 13 && debugMode == DEBUG_NONE) {
     MIDI.sendNoteOn(notes[index].midiNote, 127, configs[configIndex].midiChannel);
 
-    /*
-    if (configs[configIndex].mode.id == 1) {
+    if (configs[configIndex].mode == MODE_OCTAVE) {
       //octave
       MIDI.sendNoteOn(notes[index].midiNote+12, notes[index].velocity, configs[configIndex].midiChannel);
+    } else if (configs[configIndex].mode == MODE_DBL_OCTAVE) {
+      MIDI.sendNoteOn(notes[index].midiNote+12, notes[index].velocity, configs[configIndex].midiChannel);
+      MIDI.sendNoteOn(notes[index].midiNote+24, notes[index].velocity, configs[configIndex].midiChannel);
     }
-    */
+
   } else if (debugMode == DEBUG_NOTE) {
     Serial.print("ON ");
     Serial.println(notes[index].midiNote);   
@@ -413,6 +420,14 @@ void stopNote(int index) {
   
   if (debugMode == DEBUG_NONE) {
     MIDI.sendNoteOff(notes[index].midiNote, 0, configs[configIndex].midiChannel);
+    if (configs[configIndex].mode == MODE_OCTAVE) {
+      //octave
+      MIDI.sendNoteOff(notes[index].midiNote+12, 0, configs[configIndex].midiChannel);
+    } else if (configs[configIndex].mode == MODE_DBL_OCTAVE) {
+      MIDI.sendNoteOff(notes[index].midiNote+12, 0, configs[configIndex].midiChannel);
+      MIDI.sendNoteOff(notes[index].midiNote+24, 0, configs[configIndex].midiChannel);
+    }
+    
   } else if (debugMode == DEBUG_NOTE) {
     Serial.print("OFF ");
     Serial.println(notes[index].midiNote);          
