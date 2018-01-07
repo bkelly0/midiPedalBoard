@@ -47,7 +47,7 @@ class Note {
     long peakReading = 0;
     long baseline = 0;
     //float averagePeak = 500.0; //default - debug for each sensor
-    float velocity = 0;
+    int velocity = 0;
     int midiBaseNote = 0;
     int midiNote = 0;
     long reenableTime = 0;
@@ -66,16 +66,19 @@ class Note {
       peakReading = 0;
       velocity = 0;
     }
-    float captureVelocity() {
-      velocity = getVelocityPercentage() * 127.0;
+    void setPeakReading(int value) {
+      peakReading = value;
+    }
+    int captureVelocity() {
+      velocity = round(getVelocityPercentage() * 127.0);
       return velocity;
     }
     float getAftertouch() {
-      return getVelocityPercentage() * 127.0;
+      return round(getVelocityPercentage() * 127.0);
     }
 
     float getVelocityPercentage() {
-      float p = (peakReading - baseline) / 500.0;
+      float p = float(peakReading - baseline) / 500.0;
     
       if (p < 0) {
         p = 0;
@@ -261,12 +264,6 @@ void writeLCD(String line1, String line2) {
   lcd.print(line2);
 }
 
-void debugDifference(long difference) {
-    Serial.print(difference);
-    Serial.print(" ");
-    Serial.println();
-}
-
 void readSensors() {
   int i;
   ms = millis();
@@ -275,16 +272,18 @@ void readSensors() {
     long value = sensorMp.analogReadChannel(notes[i].mpNoteChannel);
     long difference = value - notes[i].baseline;
 
-    if (debugMode == DEBUG_SENSORS) {
+    if (debugMode == DEBUG_SENSORS && i == 5) {
       Serial.print(value);
       Serial.print(" ");
-      Serial.print(notes[i].sensorState);
+      Serial.print(notes[i].peakReading);
+      Serial.print(" ");
+      Serial.print(notes[i].stateChangeCount*100);
+      Serial.print(" ");
+      Serial.println(notes[i].sensorState*130);
     } else if (debugMode == DEBUG_DIFFERENCE) {
       Serial.print(difference);
       Serial.print(" ");
     }
-
-  
 
     if (enableTime > 0 && ms < enableTime) {
       //let a baseline be established
@@ -296,36 +295,37 @@ void readSensors() {
       if (ms >= notes[i].reenableTime) {
         notes[i].reenableTime = 0;
       } else {
-        notes[i].updateBaseline(value);
+        //notes[i].updateBaseline(value);
         continue;
       }
     }
  
     if (notes[i].sensorState == SENSOR_BASELINE && notes[i].baseline > 0 && difference > 7) {
 
-      if (difference >= 100) {
+      //if (difference >= 100) {
         //skip rising state 
-        updateNextNote(i, difference);
-        notes[i].peakReading = value;
-      } else {
+        //updateNextNote(i, difference);
+        //notes[i].setPeakReading(value);
+      //} else {
+        notes[i].setPeakReading(value);
         notes[i].sensorState = SENSOR_RISING;
-      } 
+      //} 
     } else if (notes[i].sensorState == SENSOR_RISING) {
       notes[i].stateChangeCount++;
       
-      if (value > notes[i].peakReading && notes[i].stateChangeCount < 3) {
-        notes[i].peakReading = value; //still rising
-      } else if (value <= notes[i].peakReading || notes[i].stateChangeCount == 3) {
+      if (value > notes[i].peakReading && notes[i].stateChangeCount < 20) {
+        notes[i].setPeakReading(value);
+      } else if (value <= notes[i].peakReading || notes[i].stateChangeCount >= 20) {
         updateNextNote(i, difference);
       }
 
     
     } else if (notes[i].sensorState == SENSOR_HOLDING) {      
-       if(value < notes[i].peakReading - 10) {
+       if(value < notes[i].peakReading - (notes[i].peakReading*.3)) {
           notes[i].stateChangeCount++;
           if (notes[i].stateChangeCount == 2) {
             notes[i].sensorState = SENSOR_FALLING;
-            notes[i].peakReading = 0;
+            notes[i].setPeakReading(0);
             notes[i].stateChangeCount = 0;
             stopNote(i);
           }
@@ -349,11 +349,12 @@ void readSensors() {
     }
   
     if (debugMode == DEBUG_VELOCITY) {
-      Serial.print(notes[i].velocity);
-      Serial.print(" ");
-    } else if (debugMode == DEBUG_PEAKS) {
-      Serial.print(notes[i].getPeakDebug());
-      Serial.print(" ");
+      //Serial.print(notes[i].velocity);
+      //Serial.print(" ");
+    } else if (debugMode == DEBUG_PEAKS) { 
+      //temp
+      //Serial.print(notes[i].getPeakDebug());
+      //Serial.print(" ");
     }
 
   }
@@ -386,12 +387,16 @@ void noteOn(int index) {
   }
   notes[index].stateChangeCount = 0;
   notes[index].sensorState = SENSOR_HOLDING;
+
+  //Serial.print(notes[index].peakReading);
+
+  Serial.println();
   notes[index].captureVelocity();
   digitalWrite(13, HIGH);
 
   
   if (index != 13 && debugMode == DEBUG_NONE) {
-    MIDI.sendNoteOn(notes[index].midiNote, 127, configs[configIndex].midiChannel);
+    MIDI.sendNoteOn(notes[index].midiNote, notes[index].velocity, configs[configIndex].midiChannel);
 
     if (configs[configIndex].mode == MODE_OCTAVE) {
       //octave
