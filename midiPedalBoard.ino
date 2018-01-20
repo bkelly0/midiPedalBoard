@@ -192,11 +192,11 @@ long ms;//current time
 
 void setup() {
   
-  if (debugMode != DEBUG_NONE) {
+  //if (debugMode != DEBUG_NONE) {
     Serial.begin(9600);
-  } else {
-      MIDI.begin(MIDI_CHANNEL_OMNI);
-  }
+ // } else {
+    //  MIDI.begin(MIDI_CHANNEL_OMNI);
+  //}
 
   pinMode(LED, OUTPUT);
   analogWrite(LED, 255);
@@ -267,6 +267,7 @@ void writeLCD(String line1, String line2) {
 void readSensors() {
   int i;
   ms = millis();
+  boolean hasRising = false;
   
   for (i=0; i<14; i++) {
     long value = sensorMp.analogReadChannel(notes[i].mpNoteChannel);
@@ -301,18 +302,11 @@ void readSensors() {
     }
  
     if (notes[i].sensorState == SENSOR_BASELINE && notes[i].baseline > 0 && difference > 7) {
-
-      //if (difference >= 100) {
-        //skip rising state 
-        //updateNextNote(i, difference);
-        //notes[i].setPeakReading(value);
-      //} else {
         notes[i].setPeakReading(value);
         notes[i].sensorState = SENSOR_RISING;
-      //} 
+   
     } else if (notes[i].sensorState == SENSOR_RISING) {
       notes[i].stateChangeCount++;
-      
       if (value > notes[i].peakReading && notes[i].stateChangeCount < 20) {
         notes[i].setPeakReading(value);
       } else if (value <= notes[i].peakReading || notes[i].stateChangeCount >= 20) {
@@ -347,7 +341,7 @@ void readSensors() {
     } else {
       notes[i].updateBaseline(value);
     }
-  
+
     if (debugMode == DEBUG_VELOCITY) {
       //Serial.print(notes[i].velocity);
       //Serial.print(" ");
@@ -356,8 +350,7 @@ void readSensors() {
       //Serial.print(notes[i].getPeakDebug());
       //Serial.print(" ");
     }
-
-  }
+  }//end for loop
 
   if (nextNoteIndex >= 0) {
     noteOn(nextNoteIndex);
@@ -371,7 +364,6 @@ void readSensors() {
   if (debugMode != DEBUG_NONE && debugMode != DEBUG_NOTE) {
       Serial.println();
   }
-
 }
 
 void updateNextNote(int index, long difference) {
